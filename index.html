@@ -171,6 +171,9 @@ fieldset.esg{border:1px solid var(--line,#ccd);border-radius:8px;margin:8px 0;pa
 .cam{position:relative;background:#111;border-radius:10px;overflow:hidden;display:grid;place-items:center;min-height:220px}.cam video,.cam canvas{display:block;width:100%;max-height:60vh;object-fit:contain}.cam video.mirror{transform:scaleX(-1)}.cam .frame{position:absolute;height:100%;max-width:100%;border:2px dashed rgba(255,255,255,.8);border-radius:6px;pointer-events:none;box-shadow:0 0 0 9999px rgba(0,0,0,.28)}.cam canvas:not([hidden])~.frame{display:none}.cam .cammsg{position:absolute;inset:auto 12px 12px;color:#fff;text-align:center;font-size:13px;margin:0}
 @media (max-width:1420px){.saved{display:none}.prog .track{width:60px}}
 .loaderr{margin:12px auto 0;max-width:920px;background:#fdecea;color:#8a1c1c;border:1px solid #f1b5b0;border-radius:8px;padding:10px 14px;font-size:14px}.page.noimg{min-height:200px;outline:2px dashed #c62828}
+.dlbtn{position:absolute;top:1.2%;left:50%;transform:translateX(-50%);z-index:3;border:0;border-radius:16px;padding:6px 14px;background:#5a2fc2;color:#fff;font:600 12px/1 var(--f-ui);cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.25)}.dlbtn:hover{filter:brightness(1.1)}
+.dlv{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:6px 8px;align-items:center;font-size:12px}.dlv small{color:var(--mute)}.dlv .warnx{color:var(--warn)}
+.dlt{width:100%;border-collapse:collapse;font-size:13px}.dlt td{padding:5px 6px;border-bottom:1px solid var(--line);vertical-align:top}.dlt td:first-child{width:24px}.dlt small{color:var(--mute)}
 .toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);z-index:95;background:var(--bar);color:var(--bar-fg);padding:10px 16px;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.25);font-size:13px;max-width:calc(100% - 32px)}
 @media (max-width:760px){.bar{position:static;padding:8px 12px;gap:6px 8px}.bar h1{font-size:14px}.prog .track,.saved,.bar .grow{display:none}.nav select{max-width:140px}.btn{padding:5px 9px;font-size:13px}#doc{gap:12px}}
 </style>
@@ -1146,15 +1149,51 @@ function esignSetup(){
   return new Promise(resolve => {
     const prev = (S.meta.esignSigners || []).reduce((a, s) => (a[s.h] = s, a), {});
     const rows = esignHolders().map(h => { const g = Object.assign(esignGuess(h), prev[h] && prev[h].edited ? prev[h] : {}); return g; });
+    const dlOn = typeof dlAvailable === 'function' && dlAvailable();
+    rows.forEach(r => { const m = (S.meta.digilocker || {})[r.h]; if (m && m.name) { r.dl = m; r.name = m.name; } });
+    let warned = false;
     const html = '<h2>Sign with Aadhaar eSign</h2><p class="sub">Each holder signs once with an OTP sent to the mobile number linked to their Aadhaar. The signature is applied to every signature box for that holder (' +
-      rows.map(r => ES_LABEL[r.h] + ': ' + esignBoxes(r.h).length + ' boxes').join(', ') + '). Holders who are not with you receive a signing link by SMS / e-mail.</p>' +
+      rows.map(r => ES_LABEL[r.h] + ': ' + esignBoxes(r.h).length + ' boxes').join(', ') + '). Holders who are not with you receive a signing link by SMS / e-mail.' + (dlOn ? ' First verify each holder with <b>DigiLocker</b>: the name as per Aadhaar is then used for the eSign, so the signature matches their Aadhaar.' : '') + '</p>' +
       rows.map((r, i) => '<fieldset class="esg" data-i="' + i + '"><legend>' + ES_LABEL[r.h] + '</legend>' +
         '<label>Name as per Aadhaar<input data-k="name" value="' + esc(r.name) + '" autocomplete="off"></label>' +
         '<label>Mobile (for signing link)<input data-k="mobile" inputmode="numeric" maxlength="10" value="' + esc(r.mobile) + '"></label>' +
-        '<label>E-mail (if no mobile)<input data-k="email" type="email" value="' + esc(r.email) + '"></label></fieldset>').join('') +
+        '<label>E-mail (if no mobile)<input data-k="email" type="email" value="' + esc(r.email) + '"></label>' +
+        (dlOn ? '<div class="dlv" data-v="' + i + '"></div>' : '') + '</fieldset>').join('') +
       '<p class="sub" style="margin-top:8px">Fill in any remaining hand-written items (witness, Schedule B sentence) before starting. Changes made after the eSign request is created will not appear in the signed PDF.</p>' +
       '<div class="row"><button class="dbtn" data-a="x">Cancel</button><button class="dbtn primary" data-a="go">Create eSign request</button></div>';
     modal(html, d => {
+      const drawV = i => {
+        const box = d.querySelector('[data-v="' + i + '"]'); if (!box) return; const r = rows[i], fs = box.closest('.esg'), nm = fs.querySelector('[data-k="name"]');
+        if (r.dl) {
+          nm.value = r.dl.name; nm.readOnly = true;
+          const formName = esignGuess(r.h).name, diff = formName && formName.replace(/\s+/g, ' ') !== r.dl.name.replace(/\s+/g, ' ');
+          box.innerHTML = '<span class="pill ok">✓ Verified with DigiLocker</span> <small>Name as per Aadhaar' + (r.dl.aadhaar_last4 ? ' · Aadhaar XXXX ' + esc(r.dl.aadhaar_last4) : '') + ' · ' + fmtDate(r.dl.at.slice(0, 10)) + '</small>' +
+            (diff ? '<br><small class="warnx">The name on the KYC page (' + esc(formName) + ') differs from Aadhaar. Correct the KYC page if needed.</small>' : '') +
+            ' <button class="dbtn" data-again="' + i + '" style="padding:4px 10px">Verify again</button>';
+        } else {
+          nm.readOnly = false;
+          box.innerHTML = '<span class="pill no">Not verified</span> <button class="dbtn primary" data-dl="' + i + '" style="padding:5px 12px">Verify with DigiLocker</button> <small>Holder must be present (Aadhaar OTP).</small>';
+        }
+        const go = async btn => {
+          const g = k => fs.querySelector('[data-k="' + k + '"]').value.trim();
+          const mobile = g('mobile').replace(/\D/g, ''), email = g('email');
+          if (mobile && !/^[6-9]\d{9}$/.test(mobile)) return toast('Mobile number of the ' + ES_LABEL[r.h] + ' must be 10 digits.');
+          if (!mobile && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) return toast('Enter a mobile number or e-mail for the ' + ES_LABEL[r.h] + '.');
+          btn.disabled = true; btn.textContent = 'Opening DigiLocker…';
+          try {
+            const got = await dlFetch(r.h, mobile || email.toLowerCase());
+            if (got) {
+              const { aad, pan } = dlDetails(got.resp);
+              if (!(aad.name || pan.name)) toast('DigiLocker did not return the Aadhaar name. Try again or continue without verification.');
+              else { const filledKeys = dlApplyEmpty(r.h, got.resp); dlRecord(r.h, got.kid, got.resp, filledKeys); r.dl = S.meta.digilocker[r.h]; changed(); toast(ES_LABEL[r.h] + ' verified with DigiLocker' + (filledKeys.length ? '; ' + filledKeys.length + ' empty KYC entries filled.' : '.')); }
+            }
+          } catch (e) { toast(e.message || String(e)); }
+          drawV(i);
+        };
+        const b1 = box.querySelector('[data-dl]'), b2 = box.querySelector('[data-again]');
+        if (b1) b1.onclick = () => go(b1); if (b2) b2.onclick = () => go(b2);
+      };
+      rows.forEach((r, i) => drawV(i));
       d.querySelector('[data-a="x"]').onclick = () => { closeModal(); resolve(null); };
       d.querySelector('[data-a="go"]').onclick = () => {
         const out = [];
@@ -1167,6 +1206,9 @@ function esignSetup(){
           out.push({ h: r.h, name: name.toUpperCase(), mobile, email, identifier: mobile || email.toLowerCase(), edited: name !== esignGuess(r.h).name || mobile !== esignGuess(r.h).mobile || email !== esignGuess(r.h).email });
         }
         const ids = out.map(s => s.identifier); if (new Set(ids).size !== ids.length) return toast('Each holder needs a different mobile number / e-mail.');
+        out.forEach(s => { const r = rows.find(x => x.h === s.h); if (r && r.dl) { s.dl = r.dl.id; s.name = r.dl.name; } });
+        const unv = dlOn ? out.filter(s => !s.dl) : [];
+        if (unv.length && !warned) { warned = true; const b = d.querySelector('[data-a="go"]'); b.textContent = 'Continue without DigiLocker'; return toast(unv.map(s => ES_LABEL[s.h]).join(', ') + ' not verified with DigiLocker. Verify, or click again to continue without it.'); }
         closeModal(); resolve(out);
       };
     });
@@ -1186,7 +1228,7 @@ async function esignStart(){
       signers: signers.map(s => ({ identifier: s.identifier, name: s.name })), sign_coordinates: esignCoords(signers)
     });
     S.meta.esign = { id: res.id, token: res.access_token && (res.access_token.id || res.access_token) || '', created: new Date().toISOString(), env: ESIGN_CFG.environment,
-      signers: signers.map(s => ({ h: s.h, name: s.name, identifier: s.identifier, status: 'requested' })) };
+      signers: signers.map(s => ({ h: s.h, name: s.name, identifier: s.identifier, status: 'requested', digilocker: s.dl || '' })) };
     S.meta.submittedAt = new Date().toISOString();
     await saveNow(); showRef(); closeModal(); esignPanel();
   } catch (e) { console.error(e); closeModal(); modal('<h2>eSign request not created</h2><p class="sub">' + esc(e.message || String(e)) + '</p><div class="row"><button class="dbtn primary" data-a="x">Close</button></div>', d => d.querySelector('[data-a="x"]').onclick = closeModal); }
@@ -1249,6 +1291,143 @@ function setupEsign(){
   lab.innerHTML = '<input type="checkbox" id="mEsign"> Client signatures by Aadhaar eSign';
   pop.insertBefore(lab, $('#mClear'));
   $('#mEsign').onchange = e => { pop.hidden = true; setEsignMode(e.target.checked); };
+}
+
+/* ======================= DigiLocker (via Digio KYC) ======================= */
+/* Uses the same service address as eSign (ESIGN_CFG.endpoint). Hidden until that is set. */
+const DL_PAGES = { 9: 'h1', 11: 'h2', 13: 'h3' };
+function dlAvailable(){ return !!ESIGN_CFG.endpoint && ESIGN_CFG.digilocker !== false; }
+
+function dlFind(obj, test, depth = 0){
+  if (!obj || typeof obj !== 'object' || depth > 7) return null;
+  if (test(obj)) return obj;
+  for (const k of Object.keys(obj)) { const r = dlFind(obj[k], test, depth + 1); if (r) return r; }
+  return null;
+}
+function dlDetails(resp){
+  const aad = dlFind(resp, o => o.aadhaar && typeof o.aadhaar === 'object')?.aadhaar || dlFind(resp, o => /aadhaar/i.test(o.document_type || '') && (o.name || o.id_number));
+  const pan = dlFind(resp, o => o.pan && typeof o.pan === 'object')?.pan || dlFind(resp, o => /^pan/i.test(o.document_type || '') && o.id_number);
+  return { aad: aad || {}, pan: pan || {} };
+}
+function dlDate(s){
+  s = String(s || '').trim(); let m;
+  if ((m = s.match(/^(\d{4})-(\d{2})-(\d{2})/))) return m[1] + '-' + m[2] + '-' + m[3];
+  if ((m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})$/))) return m[3] + '-' + pad2(m[2]) + '-' + pad2(m[1]);
+  return '';
+}
+function dlState(s){
+  s = String(s || '').trim().toLowerCase().replace(/\s+and\s+/g, ' & ');
+  if (!s) return '';
+  const hit = DATA.states.find(([n]) => n.toLowerCase() === s) || DATA.states.find(([n]) => n.toLowerCase().replace(/[^a-z]/g, '') === s.replace(/[^a-z]/g, ''));
+  return hit ? hit[0] : s.toUpperCase();
+}
+/* turn DigiLocker data into form values for one holder; returns [{k, label, val, show}] */
+function dlMap(h, resp){
+  const p = 'k' + h[1] + '_', { aad, pan } = dlDetails(resp), out = [];
+  const add = (k, label, val, show) => { if (val != null && String(val).trim() !== '') out.push({ k, label, val: String(val).trim(), show: show || String(val).trim() }); };
+  const name = String(aad.name || pan.name || '').trim().toUpperCase().split(/\s+/).filter(Boolean);
+  if (name.length) { add(p + 'fname', 'First name', name[0]); if (name.length > 2) add(p + 'mname', 'Middle name', name.slice(1, -1).join(' ')); if (name.length > 1) add(p + 'lname', 'Last name', name[name.length - 1]); }
+  const dob = dlDate(aad.dob || pan.dob); if (dob) add(p + 'dob', 'Date of birth', dob, fmtDate(dob));
+  const g = String(aad.gender || pan.gender || '').toUpperCase()[0]; const gv = { M: 'Male', F: 'Female', T: 'Transgender' }[g]; if (gv) add(p + 'gender', 'Gender', gv);
+  const fat = aad.father_name || aad.care_of || ''; if (fat) add(p + 'father', 'Father / Spouse name', String(fat).replace(/^(S\/O|D\/O|W\/O|C\/O)[:\s]*/i, '').toUpperCase());
+  const panNo = String(pan.id_number || '').toUpperCase(); if (/^[A-Z]{5}\d{4}[A-Z]$/.test(panNo)) add(p + 'pan', 'PAN', panNo);
+  const ad = aad.current_address_details || aad.permanent_address_details || aad.address_details || {};
+  const full = String(aad.current_address || aad.permanent_address || aad.address || '');
+  const pin = String(ad.pincode || ad.pin_code || (full.match(/\b\d{6}\b/) || [''])[0]);
+  const l1 = ad.address || ad.house || full.replace(/\b\d{6}\b/, '').replace(/,\s*$/, '');
+  if (l1) {
+    add(p + 'ca1', 'Address (line 1)', String(l1).toUpperCase().slice(0, 120));
+    add(p + 'ca2', 'Address (line 2)', String(ad.locality_or_post_office || ad.locality || ad.vtc || '').toUpperCase());
+    add(p + 'ccity', 'City / Town / Village', String(ad.district_or_city || ad.city || ad.vtc || '').toUpperCase());
+    add(p + 'cdist', 'District', String(ad.district || ad.district_or_city || '').toUpperCase());
+    add(p + 'cstate', 'State', dlState(ad.state));
+    if (/^\d{6}$/.test(pin)) add(p + 'cpin', 'PIN code', pin);
+    add(p + 'cctry', 'Country', 'India');
+    add(p + 'catype', 'Address type', 'Residential');
+  }
+  const last4 = String(aad.id_number || '').replace(/\D/g, '').slice(-4);
+  if (last4.length === 4) { add(p + 'poa', 'Proof of address', 'A', 'A – Aadhaar'); add(p + 'poa_aadhaar', 'Aadhaar (last 4 digits)', last4); }
+  return out;
+}
+
+/* run DigiLocker for one holder: create request, open Digio window, read the response. Returns {kid, resp} or null. */
+async function dlFetch(h, identifier){
+  const n = h[1];
+  const req = await esignApi('/kyc/create', { identifier, name: DER('H' + n + 'NAME') || '', reference: S.meta.ref + '-' + h });
+  await loadDigio();
+  const ok = await new Promise(resolve => {
+    const opts = { environment: ESIGN_CFG.environment, is_iframe: true, theme: { primaryColor: '#1f3a2e', secondaryColor: '#ffffff' },
+      callback: r => { if (r && r.error_code) { toast('DigiLocker was not completed: ' + (r.message || r.error_code)); resolve(false); } else resolve(true); } };
+    if (ESIGN_CFG.logo) opts.logo = ESIGN_CFG.logo;
+    const dg = new window.Digio(opts); dg.init(); dg.submit(req.id, identifier, req.access_token && (req.access_token.id || req.access_token));
+  });
+  if (!ok) return null;
+  toast('Reading the DigiLocker documents…');
+  let resp = null;
+  for (let i = 0; i < 6; i++) { resp = await esignApi('/kyc/response?id=' + encodeURIComponent(req.id)); const { aad, pan } = dlDetails(resp); if (aad.name || pan.id_number) break; await new Promise(r => setTimeout(r, 2500)); }
+  return { kid: req.id, resp };
+}
+function dlRecord(h, kid, resp, fields){
+  const { aad, pan } = dlDetails(resp);
+  S.meta.digilocker = S.meta.digilocker || {};
+  S.meta.digilocker[h] = { id: kid, at: new Date().toISOString(), name: String(aad.name || pan.name || '').trim().toUpperCase(), aadhaar_last4: String(aad.id_number || '').replace(/\D/g, '').slice(-4), fields: fields || [] };
+}
+/* fill only the KYC entries that are still empty */
+function dlApplyEmpty(h, resp){
+  const done = [];
+  const p = 'k' + h[1] + '_';
+  // name parts and address parts go together: if the client already typed any of them, leave the whole group alone
+  const groups = [['fname', 'mname', 'lname'], ['ca1', 'ca2', 'ccity', 'cdist', 'cstate', 'cpin', 'cctry', 'catype'], ['poa', 'poa_aadhaar']].map(g => g.map(x => p + x));
+  const skip = new Set(); groups.forEach(g => { if (g.some(k => filled(k) && !(k.endsWith('cctry') || k.endsWith('catype')))) g.forEach(k => skip.add(k)); });
+  dlMap(h, resp).forEach(r => { if (!skip.has(r.k) && !filled(r.k)) { S.values[r.k] = r.val; S.touched[r.k] = 1; done.push(r.k); } });
+  return done;
+}
+async function dlStart(h){
+  const n = h[1], g = esignGuess(h);
+  const prev = (S.meta.digilocker || {})[h];
+  modal('<h2>Fill from DigiLocker</h2><p class="sub">' + ES_LABEL[h] + '. The holder logs in to DigiLocker with their Aadhaar and OTP and agrees to share their Aadhaar and PAN. Name, date of birth, gender, PAN and address are then filled on the KYC page. You can check every value before it is filled.' +
+    (prev ? ' Last fetched ' + fmtDate(prev.at.slice(0, 10)) + '.' : '') + '</p>' +
+    '<fieldset class="esg"><legend>' + ES_LABEL[h] + '</legend><label>Mobile (to identify the holder)<input data-k="mobile" inputmode="numeric" maxlength="10" value="' + esc(g.mobile) + '"></label><label>or E-mail<input data-k="email" type="email" value="' + esc(g.email) + '"></label></fieldset>' +
+    '<div class="row"><button class="dbtn" data-a="x">Cancel</button><button class="dbtn primary" data-a="go">Continue to DigiLocker</button></div>', d => {
+    d.querySelector('[data-a="x"]').onclick = closeModal;
+    d.querySelector('[data-a="go"]').onclick = async () => {
+      const mobile = d.querySelector('[data-k="mobile"]').value.replace(/\D/g, ''), email = d.querySelector('[data-k="email"]').value.trim();
+      if (mobile && !/^[6-9]\d{9}$/.test(mobile)) return toast('Enter a 10-digit mobile number.');
+      if (!mobile && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) return toast('Enter a mobile number or e-mail.');
+      const identifier = mobile || email.toLowerCase(), btn = d.querySelector('[data-a="go"]'); btn.disabled = true; btn.textContent = 'Opening DigiLocker…';
+      try {
+        closeModal();
+        const got = await dlFetch(h, identifier); if (!got) return;
+        dlReview(h, got.kid, got.resp);
+      } catch (e) { closeModal(); toast(e.message || String(e)); }
+    };
+  });
+}
+function dlReview(h, kid, resp){
+  const rows = dlMap(h, resp);
+  if (!rows.length) { modal('<h2>No details received</h2><p class="sub">DigiLocker did not return Aadhaar or PAN details for this request. The holder may not have given consent, or the documents are not in their DigiLocker. You can try again or fill the page by hand.</p><div class="row"><button class="dbtn primary" data-a="x">Close</button></div>', d => d.querySelector('[data-a="x"]').onclick = closeModal); return; }
+  const html = '<h2>Check the DigiLocker details</h2><p class="sub">' + ES_LABEL[h] + '. Untick anything you do not want filled. Values already typed on the form are replaced only where ticked.</p>' +
+    '<table class="dlt">' + rows.map((r, i) => { const cur = v(r.k); return '<tr><td><input type="checkbox" data-i="' + i + '" checked aria-label="' + esc(r.label) + '"></td><td>' + esc(r.label) + '</td><td><b>' + esc(r.show) + '</b>' + (cur && cur !== r.val ? '<br><small>Now on form: ' + esc(cur) + '</small>' : '') + '</td></tr>'; }).join('') + '</table>' +
+    '<div class="row"><button class="dbtn" data-a="x">Cancel</button><button class="dbtn primary" data-a="ok">Fill the form</button></div>';
+  modal(html, d => {
+    d.querySelector('[data-a="x"]').onclick = closeModal;
+    d.querySelector('[data-a="ok"]').onclick = () => {
+      let c = 0;
+      d.querySelectorAll('input[data-i]').forEach(cb => { if (!cb.checked) return; const r = rows[+cb.dataset.i]; S.values[r.k] = r.val; S.touched[r.k] = 1; c++; });
+      dlRecord(h, kid, resp, rows.map(r => r.k));
+      closeModal(); changed(); goPage(+Object.keys(DL_PAGES).find(p => DL_PAGES[p] === h));
+      toast(c + ' entries filled from DigiLocker for the ' + ES_LABEL[h] + '.');
+    };
+  });
+}
+function setupDigilocker(){
+  if (!dlAvailable()) return;
+  Object.entries(DL_PAGES).forEach(([p, h]) => {
+    const pg = PAGE_EL[p]; if (!pg) return;
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'dlbtn'; b.textContent = 'Fill from DigiLocker';
+    b.title = 'Fetch Aadhaar and PAN details of the ' + ES_LABEL[h] + ' from DigiLocker';
+    b.onclick = () => dlStart(h); pg.appendChild(b);
+  });
 }
 
 /* ======================= storage (this browser) ======================= */
@@ -1404,7 +1583,7 @@ async function buildPdf(opts = {}){
     }
   }
   const data = {}; F.forEach(f => { const k = KEY(f); if (['sig', 'photo', 'upload', 'band'].includes(f.t) || !filled(k) || !enabled(f) || pageHidden(f.p)) return; data[k] = f.t === 'mobile' ? display(f) : v(k); });
-  data.risk_profile = risk().prof; data.reference = S.meta.ref; data.account_type = ATYPE_NAME[ATYPE()] || '';
+  data.risk_profile = risk().prof; data.reference = S.meta.ref; data.account_type = ATYPE_NAME[ATYPE()] || ''; if (S.meta.digilocker) data.digilocker = S.meta.digilocker;
   await pdf.attach(new TextEncoder().encode(JSON.stringify(data, null, 1)), 'application-data.json', { mimeType: 'application/json', description: 'Entered values in machine-readable form' });
   pdf.setTitle('PMS Account Opening Form – ' + S.meta.ref); pdf.setSubject('Allvest PMS Account Opening Form'); pdf.setModificationDate(new Date());
   return await pdf.save();
@@ -1470,7 +1649,7 @@ function setupBar(){
 
 /* ======================= start ======================= */
 (async function init(){
-  build(); setupNav(); setupCal(); setupBar(); setupEsign();
+  build(); setupNav(); setupCal(); setupBar(); setupEsign(); setupDigilocker();
   try { const d = await idbGet('draft'); if (d && d.values) { S.values = d.values; S.touched = d.touched || {}; S.meta = d.meta || {}; } } catch (e) {}
   if (!S.meta.ref) S.meta = Object.assign({ ref: newRef(), created: new Date().toISOString() }, S.meta);
   applyDefaults(); showRef(); { const cb = $('#mEsign'); if (cb) cb.checked = esignOn(); }
